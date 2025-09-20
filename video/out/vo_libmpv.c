@@ -1,25 +1,27 @@
-#include <assert.h>
-#include <limits.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include "config.h"
+#include "misc/mp_assert.h"
+#include "mpv/client.h"
+#include "mpv/render.h"
+#include "options/m_config_core.h"
+#include "osdep/threads-posix.h"
+#include "ta/ta_talloc.h"
+#include "video/img_format.h"
 
-#include "mpv_talloc.h"
 #include "common/common.h"
-#include "misc/bstr.h"
 #include "misc/dispatch.h"
 #include "common/msg.h"
-#include "options/m_config.h"
 #include "options/options.h"
 #include "aspect.h"
 #include "dr_helper.h"
 #include "vo.h"
 #include "video/mp_image.h"
 #include "sub/osd.h"
-#include "osdep/threads.h"
 #include "osdep/timer.h"
 
 #include "common/global.h"
@@ -111,11 +113,10 @@ struct mpv_render_context {
     struct mp_vo_opts *vo_opts;
 };
 
-const struct render_backend_fns *render_backends[] = {
-    &render_backend_gpu,
-    &render_backend_sw,
-    NULL
-};
+// Forward declare the available render backends
+extern const struct render_backend_fns render_backend_gpu;
+extern const struct render_backend_fns render_backend_gpu_next;
+extern const struct render_backend_fns render_backend_sw;
 
 static void update(struct mpv_render_context *ctx)
 {
@@ -183,6 +184,35 @@ int mpv_render_context_create(mpv_render_context **res, mpv_handle *mpv,
 
     if (GET_MPV_RENDER_PARAM(params, MPV_RENDER_PARAM_ADVANCED_CONTROL, int, 0))
         ctx->advanced_control = true;
+
+    char *backend_name = GET_MPV_RENDER_PARAM(params, MPV_RENDER_PARAM_BACKEND, char*, "");
+    const struct render_backend_fns **render_backends;
+
+    if (backend_name && strcmp(backend_name, "gpu-next") == 0) {
+        MP_VERBOSE(ctx, "Using gpu-next backend.\n");
+        static const struct render_backend_fns* backends[] = {
+            &render_backend_gpu_next,
+            &render_backend_sw,
+            NULL
+        };
+        render_backends = backends;
+    } else {
+        MP_VERBOSE(ctx, "Using default gpu backend.\n");
+        static const struct render_backend_fns* backends[] = {
+            &render_backend_gpu,
+            &render_backend_sw,
+            NULL
+        };
+        render_backends = backends;
+    }
+
+    MP_VERBOSE(ctx, "Using gpu-next backend.\n");
+    static const struct render_backend_fns* backends[] = {
+        &render_backend_gpu_next,
+        &render_backend_sw,
+        NULL
+    };
+    render_backends = backends;
 
     int err = MPV_ERROR_NOT_IMPLEMENTED;
     for (int n = 0; render_backends[n]; n++) {
