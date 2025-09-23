@@ -15,33 +15,33 @@
  * License along with mpv.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include <libplacebo/config.h>
+#include <libplacebo/config.h>                   // for PL_HAVE_OPENGL, PL_API_VER
 
 #ifdef PL_HAVE_D3D11
 #include <libplacebo/d3d11.h>
 #endif
 
 #ifdef PL_HAVE_OPENGL
-#include "mpv/render_gl.h"
-#include <libplacebo/opengl.h>
-#include "video/out/gpu_next/libmpv_gpu_next.h"
-#include "video/out/gpu_next/ra.h"
+#include "mpv/render_gl.h"                       // for mpv_opengl_init_params
+#include <libplacebo/opengl.h>                   // for pl_opengl_destroy
+#include "video/out/gpu_next/libmpv_gpu_next.h"  // for libmpv_gpu_next_context
+#include "video/out/gpu_next/ra.h"               // for ra_pl_create, ra_pl_...
 #endif
 
-#include "context.h"
-#include "config.h"
-#include "common/msg.h"
-#include "video/out/placebo/utils.h"
-#include <stddef.h>
-#include "mpv/client.h"
-#include "mpv/render.h"
-#include "options/options.h"
-#include "ta/ta_talloc.h"
-#include "video/out/gpu/context.h"
-#include "video/out/libmpv.h"
-#include "video/out/opengl/common.h"
-#include "video/out/vo.h"
-#include "video/out/vulkan/common.h"
+#include <stddef.h>                              // for NULL
+#include "config.h"                              // for HAVE_GL, HAVE_D3D11
+#include "context.h"                             // for gpu_ctx
+#include "common/msg.h"                          // for MP_ERR, mp_msg, mp_msg_err
+#include "mpv/client.h"                          // for mpv_error
+#include "mpv/render.h"                          // for mpv_render_param
+#include "options/options.h"                     // for mp_vo_opts
+#include "ta/ta_talloc.h"                        // for talloc_zero, talloc_...
+#include "video/out/gpu/context.h"               // for ra_ctx_opts, ra_ctx
+#include "video/out/libmpv.h"                    // for get_mpv_render_param
+#include "video/out/opengl/common.h"             // for GL
+#include "video/out/placebo/utils.h"             // for mppl_log_set_probing
+#include "video/out/vo.h"                        // for vo
+#include "video/out/vulkan/common.h"             // for mpvk_ctx
 
 #if HAVE_D3D11
 #include "osdep/windows_utils.h"
@@ -50,14 +50,14 @@
 #endif
 
 #if HAVE_GL
-#include "video/out/opengl/ra_gl.h"
+#include "video/out/opengl/ra_gl.h"              // for ra_is_gl, ra_gl_get
 # if HAVE_EGL
-#include <EGL/egl.h>
+#include <EGL/egl.h>                             // for eglGetCurrentContext
 # endif
 #endif
 
 #if HAVE_VULKAN
-#include "video/out/vulkan/context.h"
+#include "video/out/vulkan/context.h"            // for ra_vk_ctx_get
 #endif
 
 #if HAVE_GL
