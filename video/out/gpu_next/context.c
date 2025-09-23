@@ -41,7 +41,27 @@
 #include "video/out/opengl/common.h"             // for GL
 #include "video/out/placebo/utils.h"             // for mppl_log_set_probing
 #include "video/out/vo.h"                        // for vo
-#include "video/out/vulkan/common.h"             // for mpvk_ctx
+
+// -#include "context.h"
+// -#include "config.h"
+// -#include "common/common.h"
+// -#include "options/m_config.h"
+// -#include "video/out/placebo/utils.h"
+// -#include "video/out/gpu/video.h"
+// +#include <stddef.h>                              // for NULL
+// +#include "config.h"                              // for HAVE_GL, HAVE_D3D11
+// +#include "context.h"                             // for gpu_ctx
+// +#include "common/msg.h"                          // for MP_ERR, mp_msg, mp_msg_err
+// +#include "mpv/client.h"                          // for mpv_error
+// +#include "mpv/render.h"                          // for mpv_render_param
+// +#include "options/options.h"                     // for mp_vo_opts
+// +#include "ta/ta_talloc.h"                        // for talloc_zero, talloc_...
+// +#include "video/out/gpu/context.h"               // for ra_ctx_opts, ra_ctx
+// +#include "video/out/libmpv.h"                    // for get_mpv_render_param
+// +#include "video/out/opengl/common.h"             // for GL
+// +#include "video/out/placebo/utils.h"             // for mppl_log_set_probing
+// +#include "video/out/vo.h"                        // for vo
+// +#include "video/out/vulkan/common.h"             // for mpvk_ctx
 
 #if HAVE_D3D11
 #include "osdep/windows_utils.h"
