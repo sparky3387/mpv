@@ -1,4 +1,4 @@
-name: build
+name: build-valgrind
 
 on:
   push:
@@ -126,6 +126,12 @@ jobs:
           - target: aarch64-pc-windows-msvc
             arch: "arm64"
             os: "windows-11-arm"
+          # --- New Sanitizer Configuration ---
+          - target: x86_64-pc-windows-msvc
+            arch: "x64"
+            os: "windows-latest"
+            sanitizer: "address" # ASan for Clang-cl
+            build_suffix: "asan"
     env:
       VS: "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise"
       CC: "ccache clang"
@@ -173,7 +179,8 @@ jobs:
           meson wrap install libpng
           meson wrap install zlib
 
-      - name: Build
+      - name: Build (Normal)
+        if: ${{ matrix.sanitizer == '' }}
         id: build
         run: |
           $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -ne 'C:\Program Files\LLVM\bin' -and `
@@ -184,12 +191,13 @@ jobs:
           Enter-VsDevShell -VsInstallPath $env:VS -SkipAutomaticLocation -DevCmdArguments "-arch=${{ matrix.arch }} -host_arch=${{ matrix.arch }}"
           ./ci/build-win32.ps1
 
-      - name: Print build log
+      - name: Print build log (Normal)
         if: ${{ failure() && steps.build.outcome == 'failure' }}
         run: |
           cat ./build/meson-logs/meson-log.txt
 
-      - name: Run meson tests
+      - name: Run meson tests (Normal)
+        if: ${{ matrix.sanitizer == '' }}
         id: tests
         run: |
           $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -ne 'C:\Program Files\LLVM\bin' -and `
@@ -200,12 +208,43 @@ jobs:
           Enter-VsDevShell -VsInstallPath $env:VS -SkipAutomaticLocation -DevCmdArguments "-arch=${{ matrix.arch }} -host_arch=${{ matrix.arch }}"
           meson test -C build -t 2
 
-      - name: Print meson test log
+      - name: Print meson test log (Normal)
         if: ${{ failure() && steps.tests.outcome == 'failure' }}
         run: |
           cat ./build/meson-logs/testlog.txt
 
+      - name: Build with meson (Sanitizer)
+        if: ${{ matrix.sanitizer == 'address' }}
+        id: build_sanitizer
+        shell: pwsh
+        run: |
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -ne 'C:\Program Files\LLVM\bin' -and $_ -ne 'C:\Program Files\CMake\bin' -and $_ -ne 'C:\Strawberry\c\bin' }) -join ';'
+          $env:PATH = "$pwd\cmake\bin;" + $env:PATH + ';C:\Program Files\NASM'
+          Import-Module "$env:VS\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $env:VS -SkipAutomaticLocation -DevCmdArguments "-arch=${{ matrix.arch }} -host_arch=${{ matrix.arch }}"
+          $BUILD_DIR = "build-${{ matrix.build_suffix }}"
+          meson setup $BUILD_DIR -Dlibmpv=true -Dcplayer=true -Dbuildtype=debug -Dc_args="/fsanitize=address /Zi /Od /fno-omit-frame-pointer" -Dc_link_args="/fsanitize=address /DEBUG"
+          meson compile -C $BUILD_DIR
+
+      - name: Run meson tests (Sanitizer)
+        if: ${{ matrix.sanitizer == 'address' }}
+        id: tests_sanitizer
+        shell: pwsh
+        run: |
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -ne 'C:\Program Files\LLVM\bin' -and $_ -ne 'C:\Program Files\CMake\bin' -and $_ -ne 'C:\Strawberry\c\bin' }) -join ';'
+          $env:PATH = "$pwd\cmake\bin;" + $env:PATH + ';C:\Program Files\NASM'
+          Import-Module "$env:VS\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $env:VS -SkipAutomaticLocation -DevCmdArguments "-arch=${{ matrix.arch }} -host_arch=${{ matrix.arch }}"
+          $env:ASAN_OPTIONS = "detect_leaks=1:halt_on_error=1"
+          meson test -C build-${{ matrix.build_suffix }} -t 2
+
+      - name: Print meson test log (Sanitizer)
+        if: ${{ failure() && steps.tests_sanitizer.outcome == 'failure' }}
+        run: |
+          cat ./build-${{ matrix.build_suffix }}/meson-logs/testlog.txt
+
       - uses: actions/upload-artifact@v4
+        if: ${{ matrix.sanitizer == '' }}
         with:
           name: mpv-${{ matrix.target }}
           path: |
@@ -224,6 +263,7 @@ jobs:
   macos:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: "macos-13"
@@ -239,6 +279,15 @@ jobs:
             arch: "test"
             swift: "-target arm64-apple-macosx10.15"
             target: "10.15"
+          # --- New Sanitizer Configurations ---
+          - os: "macos-14"
+            arch: "arm"
+            sanitizer: "address"
+            build_suffix: "asan"
+          - os: "macos-14"
+            arch: "arm"
+            sanitizer: "thread"
+            build_suffix: "tsan"
     steps:
       - uses: actions/checkout@v4
 
@@ -268,7 +317,8 @@ jobs:
           brew install -q autoconf automake pkgconf libtool python freetype fribidi little-cms2 \
             luajit libass ffmpeg meson rust uchardet mujs libplacebo molten-vk vulkan-loader vulkan-headers
 
-      - name: Build with meson
+      - name: Build with meson (Normal)
+        if: ${{ matrix.sanitizer == '' }}
         id: build
         run: |
           ./ci/build-macos.sh
@@ -277,29 +327,58 @@ jobs:
           SWIFT_FLAGS: "${{ matrix.swift }}"
           MACOSX_DEPLOYMENT_TARGET: "${{ matrix.target }}"
 
-      - name: Create App Bundle
-        if: ${{ matrix.arch != 'test' }}
+      - name: Create App Bundle (Normal)
+        if: ${{ matrix.arch != 'test' && matrix.sanitizer == '' }}
         run: |
           meson compile -C build macos-bundle
           tar -czvf mpv.tar.gz -C build mpv.app
 
-      - name: Print meson log
+      - name: Print meson log (Normal)
         if: ${{ failure() && steps.build.outcome == 'failure' }}
         run: |
           cat ./build/meson-logs/meson-log.txt
 
-      - name: Run meson tests
+      - name: Run meson tests (Normal)
+        if: ${{ matrix.sanitizer == '' }}
         id: tests
         run: |
           meson test -C build
 
-      - name: Print meson test log
+      - name: Print meson test log (Normal)
         if: ${{ failure() && steps.tests.outcome == 'failure' }}
         run: |
           cat ./build/meson-logs/testlog.txt
 
+      - name: Build with meson (Sanitizer)
+        if: ${{ matrix.sanitizer != '' }}
+        id: build_sanitizer
+        run: |
+          BUILD_DIR="build-${{ matrix.build_suffix }}"
+          meson setup $BUILD_DIR \
+            -Dlibmpv=true -Dcplayer=true -Dbuildtype=debug \
+            -Dc_args="-fsanitize=${{ matrix.sanitizer }} -fno-omit-frame-pointer" \
+            -Dc_link_args="-fsanitize=${{ matrix.sanitizer }}" \
+            -Db_lundef=false
+          meson compile -C $BUILD_DIR
+
+      - name: Run meson tests (Sanitizer)
+        if: ${{ matrix.sanitizer != '' }}
+        id: tests_sanitizer
+        run: |
+          if [[ "${{ matrix.sanitizer }}" == "address" ]]; then
+            export ASAN_OPTIONS="detect_leaks=1:halt_on_error=1"
+          elif [[ "${{ matrix.sanitizer }}" == "thread" ]]; then
+            export TSAN_OPTIONS="report_signal_unsafe=0:halt_on_error=1"
+          fi
+          meson test -C build-${{ matrix.build_suffix }}
+
+      - name: Print meson test log (Sanitizer)
+        if: ${{ failure() && steps.tests_sanitizer.outcome == 'failure' }}
+        run: |
+          cat ./build-${{ matrix.build_suffix }}/meson-logs/testlog.txt
+
       - uses: actions/upload-artifact@v4
-        if: ${{ matrix.arch != 'test' }}
+        if: ${{ matrix.arch != 'test' && matrix.sanitizer == '' }}
         with:
           name: mpv-${{ matrix.os }}-${{ matrix.arch }}
           path: mpv.tar.gz
@@ -323,8 +402,17 @@ jobs:
             cxx: "clang++"
             ld: "lld"
             args: "-Db_lto=true -Db_lto_mode=thin"
+          # --- New Valgrind Configuration ---
+          - cc: "gcc"
+            cxx: "g++"
+            args: "-Dbuildtype=debug -Db_lundef=false"
+            valgrind: true
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Valgrind
+        if: matrix.config.valgrind
+        run: zypper --non-interactive install valgrind
 
       - name: Build with meson
         id: build
@@ -340,7 +428,11 @@ jobs:
         id: tests
         run: |
           export LSAN_OPTIONS="suppressions=${GITHUB_WORKSPACE}/.lsan_suppressions"
-          meson test -C build
+          if [[ "${{ matrix.config.valgrind }}" == "true" ]]; then
+            meson test -C build --wrap='valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1'
+          else
+            meson test -C build
+          fi
 
       - name: Print meson test log
         if: ${{ failure() && steps.tests.outcome == 'failure' }}
@@ -374,9 +466,6 @@ jobs:
   linux-ffmpeg-6-1:
     runs-on: ubuntu-latest
     container:
-      # We want to test ffmpeg 6.1.1 which alpine 3.19 has exactly.
-      # Furthermore, this is a very minimal build of mpv without commonly
-      # used features to test build compatibility. Musl is a nice bonus as well
       image: alpine:3.19
     steps:
       - uses: actions/checkout@v4
@@ -424,8 +513,8 @@ jobs:
           cat ./build/meson-logs/testlog.txt
 
   openbsd:
-    runs-on: ubuntu-latest # until https://github.com/actions/runner/issues/385
-    timeout-minutes: 30 # avoid any weirdness with the VM
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
     - name: Test in OpenBSD VM
@@ -434,35 +523,7 @@ jobs:
         operating_system: openbsd
         version: '7.7'
         run: |
-            sudo pkg_add -U \
-                cmake \
-                ffmpeg \
-                git \
-                libarchive \
-                libbluray \
-                libcaca \
-                libcdio-paranoia \
-                libdvdnav \
-                libiconv \
-                libplacebo \
-                libv4l \
-                libxkbcommon \
-                luajit \
-                meson \
-                openal \
-                pkgconf \
-                pulseaudio \
-                python3 \
-                rubberband \
-                rust \
-                sdl2 \
-                shaderc \
-                spirv-cross \
-                spirv-headers \
-                uchardet \
-                vulkan-loader \
-                vulkan-headers \
-                zimg
+            sudo pkg_add -U cmake ffmpeg git libarchive libbluray libcaca libcdio-paranoia libdvdnav libiconv libplacebo libv4l libxkbcommon luajit meson openal pkgconf pulseaudio python3 rubberband rust sdl2 shaderc spirv-cross spirv-headers uchardet vulkan-loader vulkan-headers zimg
             ./ci/build-openbsd.sh
             if ! meson test -C build; then
                 cat ./build/meson-logs/testlog.txt
@@ -470,8 +531,8 @@ jobs:
             fi
 
   freebsd:
-    runs-on: ubuntu-latest # until https://github.com/actions/runner/issues/385
-    timeout-minutes: 30 # avoid any weirdness with the VM
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
     - name: Test in FreeBSD VM
@@ -481,42 +542,7 @@ jobs:
         version: '14.2'
         run: |
             sudo pkg update
-            sudo pkg install -y \
-                alsa-lib \
-                cmake \
-                evdev-proto \
-                ffmpeg \
-                git \
-                iconv \
-                jackit \
-                libarchive \
-                libbluray \
-                libcaca \
-                libcdio-paranoia \
-                libdvdnav \
-                libdisplay-info \
-                libplacebo \
-                libXinerama \
-                libxkbcommon \
-                libxpresent \
-                libXv \
-                luajit \
-                meson \
-                mujs \
-                openal-soft \
-                pipewire \
-                pkgconf \
-                pulseaudio \
-                python3 \
-                rubberband \
-                rust \
-                sekrit-twc-zimg \
-                sdl2 \
-                sndio \
-                uchardet \
-                v4l_compat \
-                vulkan-headers \
-                wayland-protocols
+            sudo pkg install -y alsa-lib cmake evdev-proto ffmpeg git iconv jackit libarchive libbluray libcaca libcdio-paranoia libdvdnav libdisplay-info libplacebo libXinerama libxkbcommon libxpresent libXv luajit meson mujs openal-soft pipewire pkgconf pulseaudio python3 rubberband rust sekrit-twc-zimg sdl2 sndio uchardet v4l_compat vulkan-headers wayland-protocols
             ./ci/build-freebsd.sh
             if ! meson test -C build; then
                 cat ./build/meson-logs/testlog.txt
@@ -537,6 +563,19 @@ jobs:
             os: "windows-latest"
           - sys: "clangarm64"
             os: "windows-11-arm"
+          # --- New Sanitizer/Dr. Memory Configurations ---
+          - sys: "clang64"
+            os: "windows-latest"
+            sanitizer: "address"
+            build_suffix: "asan"
+          - sys: "clang64"
+            os: "windows-latest"
+            sanitizer: "thread"
+            build_suffix: "tsan"
+          - sys: "mingw64"
+            os: "windows-latest"
+            drmemory: true
+            build_suffix: "drmemory"
     defaults:
       run:
         shell: msys2 {0}
@@ -546,57 +585,77 @@ jobs:
         run: |
           git config --global core.autocrlf false
           git config --global core.eol lf
-      - uses: actions/checkout@v4
       - uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.sys }}
           update: true
           install: git
           pacboy: >-
-            angleproject:p
-            ca-certificates:p
-            cc:p
-            cppwinrt:p
-            ffmpeg:p
-            lcms2:p
-            libarchive:p
-            libass:p
-            libcdio-paranoia:p
-            libdvdnav:p
-            libjpeg-turbo:p
-            libplacebo:p
-            lua51:p
-            meson:p
-            ninja:p
-            pkgconf:p
-            python:p
-            rst2pdf:p
-            rubberband:p
-            rust:p
-            shaderc:p
-            spirv-cross:p
-            uchardet:p
-            vapoursynth:p
-            vulkan-devel:p
+            angleproject:p ca-certificates:p cc:p cppwinrt:p ffmpeg:p lcms2:p libarchive:p libass:p libcdio-paranoia:p libdvdnav:p libjpeg-turbo:p libplacebo:p lua51:p meson:p ninja:p pkgconf:p python:p rst2pdf:p rubberband:p rust:p shaderc:p spirv-cross:p uchardet:p vapoursynth:p vulkan-devel:p
+            ${{ (matrix.drmemory) && 'drmemory:p' || '' }}
 
-      - name: Build with meson
+      - name: Build with meson (Normal)
+        if: ${{ matrix.sanitizer == '' && !matrix.drmemory }}
         id: build
         run: |
           ./ci/build-msys2.sh meson
         env:
           SYS: ${{ matrix.sys }}
 
-      - name: Print meson log
+      - name: Print meson log (Normal)
         if: ${{ failure() && steps.build.outcome == 'failure' }}
         run: |
           cat ./build/meson-logs/meson-log.txt
 
-      - name: Run meson tests
+      - name: Run meson tests (Normal)
+        if: ${{ matrix.sanitizer == '' && !matrix.drmemory }}
         id: tests
         run: |
           meson test -C build
 
-      - name: Print meson test log
+      - name: Print meson test log (Normal)
         if: ${{ failure() && steps.tests.outcome == 'failure' }}
         run: |
           cat ./build/meson-logs/testlog.txt
+
+      - name: Build with meson (Sanitizer/Dr. Memory)
+        if: ${{ matrix.sanitizer != '' || matrix.drmemory }}
+        id: build_special
+        run: |
+          BUILD_DIR="build-${{ matrix.build_suffix }}"
+          MESON_ARGS="-Dlibmpv=true -Dcplayer=true -Dbuildtype=debug -Db_lundef=false"
+          if [[ "${{ matrix.sanitizer }}" == "address" ]]; then
+            MESON_ARGS+=" -Dc_args='-fsanitize=address -fno-omit-frame-pointer' -Dc_link_args='-fsanitize=address'"
+          elif [[ "${{ matrix.sanitizer }}" == "thread" ]]; then
+            MESON_ARGS+=" -Dc_args='-fsanitize=thread -fno-omit-frame-pointer' -Dc_link_args='-fsanitize=thread'"
+          fi
+          meson setup $BUILD_DIR $MESON_ARGS
+          meson compile -C $BUILD_DIR
+
+      - name: Run meson tests (Sanitizer/Dr. Memory)
+        if: ${{ matrix.sanitizer != '' || matrix.drmemory }}
+        id: tests_special
+        run: |
+          BUILD_DIR="build-${{ matrix.build_suffix }}"
+          if [[ "${{ matrix.drmemory }}" == "true" ]]; then
+            meson test -C $BUILD_DIR --wrap='drmemory -logdir "${GITHUB_WORKSPACE}/drmemory_logs/${BUILD_DIR}" --'
+          else
+            if [[ "${{ matrix.sanitizer }}" == "address" ]]; then
+              export ASAN_OPTIONS="abort_on_error=1:detect_leaks=1"
+            elif [[ "${{ matrix.sanitizer }}" == "thread" ]]; then
+              export TSAN_OPTIONS="report_signal_unsafe=0:halt_on_error=1"
+            fi
+            meson test -C $BUILD_DIR
+          fi
+
+      - name: Print meson test log (Sanitizer/Dr. Memory)
+        if: ${{ failure() && steps.tests_special.outcome == 'failure' }}
+        run: |
+          cat ./build-${{ matrix.build_suffix }}/meson-logs/testlog.txt
+
+      - name: Upload Dr. Memory Logs
+        if: ${{ failure() && matrix.drmemory && steps.tests_special.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: drmemory-logs-${{ matrix.sys }}
+          path: drmemory_logs/
